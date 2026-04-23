@@ -56,46 +56,45 @@ const formatCurrency = (value: number) =>
     currency: 'IDR',
     maximumFractionDigits: 0,
   }).format(value)
-
+  
 const TEAM_MEMBERS: TeamMember[] = [
   {
     name: 'Aziza Dharma Putri',
     nim: '13524017',
-    description: 'Website ini bagus dan dibuat supaya monitoring listrik terasa lebih mudah dipahami.',
+    description: 'Berfokus pada perancangan dan pengembangan website monitoring agar data kelistrikan dapat ditampilkan dengan baik.',
     photo: '/team/aziza.jpg',
   },
   {
     name: 'Muchammad Asshiddiqi',
     nim: '18024016',
-    description: 'Fokus pada desain antarmuka yang rapi, ringan, dan nyaman dilihat saat dipakai lama.',
+    description: 'Berfokus pada penyusunan laporan proyek agar seluruh proses perancangan dan hasil pengujian terdokumentasi dengan baik.',
     photo: '/team/diqi.jpg',
   },
   {
     name: 'Rasyid Abdurrahman',
     nim: '18024056',
-    description: 'Membantu pengujian alur data agar dashboard bisa menampilkan hasil dengan cepat.',
+    description: 'Berfokus pada pembuatan rangkaian alat bersama tim hardware agar sistem dapat bekerja sesuai perancangan.',
     photo: '/team/ocid.jpg',
   },
   {
     name: 'Nathanael Pramanugraha',
     nim: '18024048',
-    description: 'Mengembangkan dokumentasi singkat agar fitur website mudah dipahami oleh pengguna baru.',
+    description: 'Berfokus pada pembuatan video sebagai media dokumentasi dan presentasi hasil proyek.',
     photo: '/team/nael.jpg',
   },
   {
     name: 'Aldito Zahran Habibi',
     nim: '18024006',
-    description: 'Membantu memastikan tampilan tetap responsif saat dibuka di laptop maupun di ponsel.',
+    description: 'Berfokus pada pembuatan poster proyek serta pengadaan bahan yang dibutuhkan selama proses perakitan.',
     photo: '/team/aldito.jpg',
   },
   {
     name: 'Khairul Arief Rahman',
     nim: '18024008',
-    description: 'Berfokus pada presentasi data agar hasil monitoring listrik terlihat jelas dan konsisten.',
+    description: 'Berfokus pada pembuatan rangkaian alat bersama tim hardware untuk memastikan integrasi komponen berjalan dengan baik.',
     photo: '/team/khairul.jpg',
   },
 ]
-
 const LineChart = ({
   data,
   field,
