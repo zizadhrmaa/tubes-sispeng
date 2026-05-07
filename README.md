@@ -1,49 +1,38 @@
-# ⚡ Smart KWH Meter Dashboard
+# 📐 Tubes Sispeng — EP2004 Sistem Pengukuran
 
-Website monitoring KWH meter berbasis ESP32 + PZEM004T dengan tampilan lucu!
+Dashboard monitoring **tiga alat ukur** berbasis ESP32 dalam satu website.
 
-## 🚀 Cara Deploy
+| Alat | Komponen | Firebase Path |
+|------|----------|--------------|
+| ⚡ KWH Meter | ESP32 + PZEM004T | `meters/{deviceId}/latest` |
+| 🔍 Cable Fault Detector | ESP32 + INA219 + ADS1115 | `cable-fault/{deviceId}/latest` |
+| 📡 Osiloskop | ESP32 + TFT Display | *(informasi statis)* |
 
-### Option 1: Vercel (Paling Mudah)
-1. Upload folder ini ke GitHub
-2. Buka vercel.com → Import Project → pilih repo
-3. Klik Deploy — selesai! ✅
+## 🚀 Deploy
 
-### Option 2: Netlify
-1. Upload folder ini ke GitHub
-2. Buka netlify.com → Add new site → Import from Git
-3. Build command: `npm run build`
-4. Publish directory: `dist`
-5. Deploy! ✅
-
-### Option 3: Manual
-```bash
-npm install
-npm run build
-# Upload folder dist/ ke hosting manapun
+**Netlify:**
+```
+Build command  : npm run build
+Publish dir    : dist
 ```
 
-## 🔌 Koneksi ke ESP32
+**Vercel:**
+1. Push ke GitHub (repo: `tubes-sispeng`)
+2. Import di vercel.com → Deploy ✅
 
-1. Buka website → klik ⚙️ Setting
-2. Masukkan IP Address ESP32 (cek di Serial Monitor)
-3. ESP32 harus konek WiFi yang sama dengan browser
+## 🔥 Firebase — Struktur Data
 
-### Endpoint yang dibutuhkan di ESP32:
 ```
-GET http://<IP_ESP32>/data
-Response JSON:
-{
-  "voltage": 220.5,
-  "current": 1.23,
-  "power": 270.6,
-  "energy": 12.4,
-  "frequency": 50.0,
-  "pf": 0.90
-}
+meters/
+  {deviceId}/
+    latest/
+      voltage, current, power, energy, frequency, pf, connected
+
+cable-fault/
+  {deviceId}/
+    latest/
+      resistansi, lokasi, tegangan, arus_potensial, arus_galvanometer, connected
 ```
 
 ## 📦 Tech Stack
-- React 19 + TypeScript
-- Tailwind CSS v3
-- Vite 6
+React 19 + TypeScript · Tailwind CSS · Vite · Firebase Realtime Database
