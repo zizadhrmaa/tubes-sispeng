@@ -15,12 +15,27 @@ interface CableData {
   connected: boolean; timestamp: string
 }
 interface HistoryPoint { time: string; voltage: number; current: number; power: number }
+interface OscilloData {
+  connected: boolean; timestamp: string
+  modeTampilan: number; tampilInfo: boolean
+  tipeSinyalCH1: number; tipeSinyalCH2: number
+  dataCH1: number[]; dataCH2: number[]
+  ch1: { vpp: number; freq: number; vdc: number; vmax: number; vmin: number }
+  ch2: { vpp: number; freq: number; vdc: number; vmax: number; vmin: number }
+  sampleTimeUs: number
+}
 interface Member { name: string; nim: string; role: string; photo: string }
 type ActiveView = 'kwh' | 'cable' | 'oscillo' | 'about'
 
 /* ─────────────────────────────── CONSTANTS ─── */
 const EMPTY_KWH: KwhData = { voltage:0, current:0, power:0, energy:0, frequency:0, pf:0, connected:false, timestamp:'-' }
 const EMPTY_CABLE: CableData = { resistansi:0, lokasi:0, tegangan:0, arus_potensial:0, arus_galvanometer:0, connected:false, timestamp:'-' }
+const EMPTY_OSCILLO: OscilloData = {
+  connected:false, timestamp:'-', modeTampilan:0, tampilInfo:false,
+  tipeSinyalCH1:0, tipeSinyalCH2:0, dataCH1:[], dataCH2:[],
+  ch1:{vpp:0,freq:0,vdc:0,vmax:0,vmin:0}, ch2:{vpp:0,freq:0,vdc:0,vmax:0,vmin:0},
+  sampleTimeUs:0,
+}
 
 const TEAM: Member[] = [
   { name:'Aziza Dharma Putri',     nim:'13524017', role:'Perancangan & pengembangan website monitoring.',         photo:'/team/aziza.jpg' },
@@ -376,100 +391,203 @@ const CableFault = () => {
 }
 
 /* ─────────────────────────────── OSCILLO DASHBOARD ─── */
-const Oscillo = () => (
-  <>
-    <div className="card project-hero">
-      <div>
-        <div className="hero-eyebrow"><span className="hero-tag">EP2004 · Osiloskop</span></div>
-        <div className="hero-title">SmartScope — Osiloskop Digital Portable</div>
-        <div className="hero-desc">
-          Osiloskop dua kanal berbasis ESP32 dengan konektivitas WiFi. Monitor sinyal listrik secara real-time dari perangkat mobile maupun laptop.
-        </div>
-      </div>
-      <div className="hero-right">
-        <div className="status-pill online"><div className="status-dot"/>Informasi statis</div>
-      </div>
-    </div>
+const SIGNAL_LABELS = ['SIN','DC','SQR','TRI']
+const MODE_LABELS = ['Dual · fokus CH1','Dual · fokus CH2','Full CH1','Full CH2','Overlay · fokus CH1','Overlay · fokus CH2']
 
-    <div className="oscillo-specs">
-      {[
-        {icon:'📶', label:'Konektivitas', val:'WiFi 2.4 GHz', sub:'Akses dari HP / Laptop'},
-        {icon:'⏱',  label:'Sampling Rate', val:'100 µs DMA',  sub:'Mode FAST & SLOW'},
-        {icon:'📊', label:'Kanal input', val:'2 Channel',    sub:'CH1 & CH2 independen'},
-        {icon:'⚡', label:'Range input', val:'DC 1V/kanal',  sub:'Filter RC adjustable'},
-        {icon:'🎛', label:'Fitur tambahan', val:'FFT + DDS',  sub:'Pulse generator built-in'},
-        {icon:'🔋', label:'Sumber daya', val:'USB / Baterai', sub:'Portable, tanpa kabel'},
-      ].map(s=>(
-        <div key={s.label} className="card spec-card">
-          <div className="spec-icon">{s.icon}</div>
-          <div className="spec-label">{s.label}</div>
-          <div className="spec-val">{s.val}</div>
-          <div className="spec-sub">{s.sub}</div>
-        </div>
-      ))}
-    </div>
+const asNumberArray = (value: unknown) => {
+  if (Array.isArray(value)) return value.map(v=>Number(v ?? 0)).filter(Number.isFinite)
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort((a,b)=>Number(a)-Number(b))
+      .map(k=>Number((value as Record<string, unknown>)[k] ?? 0))
+      .filter(Number.isFinite)
+  }
+  return []
+}
 
-    <div className="card info-card">
-      <div className="info-title">Komponen Utama</div>
-      <div className="oscillo-comps" style={{marginTop:'12px'}}>
-        {[
-          {name:'ESP32 WROOM-32', role:'Mikrokontroler utama + WiFi + Bluetooth', color:'#2563eb'},
-          {name:'TFT 2.8" SPI 240×320', role:'Display sinyal real-time', color:'#7c3aed'},
-          {name:'Resistor & Kapasitor', role:'Filter sinyal input CH1 dan CH2', color:'#059669'},
-          {name:'Push Button (4×)', role:'Navigasi: Up / Down / Left / Right', color:'#d97706'},
-        ].map(c=>(
-          <div key={c.name} className="comp-item">
-            <div className="comp-dot" style={{background:c.color}}/>
-            <div><strong>{c.name}</strong><p>{c.role}</p></div>
+const voltsFromAdc = (adc: number) => (adc / 4095) * 3.3
+const readMetric = (obj: any, keys: string[], fallback = 0) => {
+  for (const k of keys) {
+    const n = Number(obj?.[k])
+    if (Number.isFinite(n)) return n
+  }
+  return fallback
+}
+
+const calcChannelStats = (samples: number[], signalType: number, sampleTimeUs: number) => {
+  if (!samples.length) return {vpp:0, freq:0, vdc:0, vmax:0, vmin:0}
+  const maxADC = Math.max(...samples)
+  const minADC = Math.min(...samples)
+  const avgADC = samples.reduce((a,b)=>a+b,0) / samples.length
+  const vmax = voltsFromAdc(maxADC)
+  const vmin = voltsFromAdc(minADC)
+  const vpp = vmax - vmin
+  const vdc = voltsFromAdc(avgADC)
+  let crossing = 0
+  for (let i=1; i<samples.length; i++) {
+    if (samples[i-1] < avgADC && samples[i] >= avgADC) crossing++
+  }
+  const totalSeconds = sampleTimeUs > 0 ? sampleTimeUs / 1_000_000 : 0
+  const freq = signalType !== 1 && vpp > 0.1 && totalSeconds > 0 ? crossing / totalSeconds : 0
+  return {vpp, freq, vdc, vmax, vmin}
+}
+
+const Waveform = ({ ch1, ch2, mode }: { ch1: number[]; ch2: number[]; mode: number }) => {
+  const W = 640, H = 220
+  const normalize = (arr: number[], top: number, bottom: number) => {
+    const safe = arr.length ? arr : [0]
+    const step = W / Math.max(safe.length - 1, 1)
+    return safe.map((v,i)=>`${i*step},${bottom - (Math.min(Math.max(v,0),4095) / 4095) * (bottom-top)}`).join(' ')
+  }
+  const dual = mode === 0 || mode === 1
+  const showCH1 = mode !== 3
+  const showCH2 = mode !== 2
+  return (
+    <div className="card wave-card">
+      <div className="wave-head">
+        <div>
+          <div className="info-title">Waveform ADC Real-time</div>
+          <div className="wave-sub">Grafik mengikuti array <span>dataCH1</span> dan <span>dataCH2</span> dari ESP32.</div>
+        </div>
+        <div className="wave-legend"><span className="legend-ch1"/>CH1 <span className="legend-ch2"/>CH2</div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="wave-svg" preserveAspectRatio="none">
+        {[0,1,2,3,4].map(i=><line key={`h${i}`} x1="0" x2={W} y1={(H/4)*i} y2={(H/4)*i} className="grid-line"/>)}
+        {[0,1,2,3,4,5,6,7,8].map(i=><line key={`v${i}`} y1="0" y2={H} x1={(W/8)*i} x2={(W/8)*i} className="grid-line"/>)}
+        {dual && <line x1="0" x2={W} y1={H/2} y2={H/2} className="mid-line"/>}
+        {showCH1 && <polyline points={normalize(ch1, dual ? 8 : 8, dual ? H/2-8 : H-8)} className="wave-line ch1"/>}
+        {showCH2 && <polyline points={normalize(ch2, dual ? H/2+8 : 8, dual ? H-8 : H-8)} className="wave-line ch2"/>}
+      </svg>
+    </div>
+  )
+}
+
+const Oscillo = () => {
+  const [deviceId,setDeviceId] = useState('lab01')
+  const [temp,setTemp] = useState('lab01')
+  const [data,setData] = useState<OscilloData>(EMPTY_OSCILLO)
+  const [showModal,setShowModal] = useState(false)
+  const [error,setError] = useState('')
+
+  useEffect(()=>{
+    const r = ref(db,`oscilloscope/${deviceId}/latest`)
+    return onValue(r, snap=>{
+      const j = snap.val()
+      if(!j){ setData(p=>({...p,connected:false,timestamp:'-'})); setError('Data osiloskop belum ada di Firebase.'); return }
+      const rawCH1 = asNumberArray(j.dataCH1 ?? j.ch1?.samples ?? j.samplesCH1)
+      const rawCH2 = asNumberArray(j.dataCH2 ?? j.ch2?.samples ?? j.samplesCH2)
+      const tipeSinyalCH1 = Number(j.tipeSinyalCH1 ?? j.ch1?.tipeSinyal ?? j.ch1?.signalType ?? 0)
+      const tipeSinyalCH2 = Number(j.tipeSinyalCH2 ?? j.ch2?.tipeSinyal ?? j.ch2?.signalType ?? 0)
+      const sampleTimeUs = Number(j.sampleTimeUs ?? j.waktuSamplingUs ?? j.captureTimeUs ?? 128 * 50)
+      const calcCH1 = calcChannelStats(rawCH1, tipeSinyalCH1, sampleTimeUs)
+      const calcCH2 = calcChannelStats(rawCH2, tipeSinyalCH2, sampleTimeUs)
+      const next: OscilloData = {
+        connected: Boolean(j.connected ?? true),
+        timestamp: String(j.timestamp ?? new Date().toLocaleTimeString('id-ID')),
+        modeTampilan: Number(j.modeTampilan ?? 0),
+        tampilInfo: Boolean(j.tampilInfo ?? false),
+        tipeSinyalCH1,
+        tipeSinyalCH2,
+        dataCH1: rawCH1,
+        dataCH2: rawCH2,
+        sampleTimeUs,
+        ch1: {
+          vpp: readMetric(j.ch1, ['vpp','Vpp'], calcCH1.vpp),
+          freq: readMetric(j.ch1, ['freq','frequency','frekuensi'], calcCH1.freq),
+          vdc: readMetric(j.ch1, ['vdc','Vdc','vAvg'], calcCH1.vdc),
+          vmax: readMetric(j.ch1, ['vmax','vMax'], calcCH1.vmax),
+          vmin: readMetric(j.ch1, ['vmin','vMin'], calcCH1.vmin),
+        },
+        ch2: {
+          vpp: readMetric(j.ch2, ['vpp','Vpp'], calcCH2.vpp),
+          freq: readMetric(j.ch2, ['freq','frequency','frekuensi'], calcCH2.freq),
+          vdc: readMetric(j.ch2, ['vdc','Vdc','vAvg'], calcCH2.vdc),
+          vmax: readMetric(j.ch2, ['vmax','vMax'], calcCH2.vmax),
+          vmin: readMetric(j.ch2, ['vmin','vMin'], calcCH2.vmin),
+        },
+      }
+      setData(next)
+      setError('')
+    }, ()=>{ setData(p=>({...p,connected:false})); setError('Gagal terhubung ke Firebase.') })
+  },[deviceId])
+
+  const activeCH = data.modeTampilan === 0 || data.modeTampilan === 2 || data.modeTampilan === 4 ? 'CH1' : 'CH2'
+  const activeSignal = activeCH === 'CH1' ? data.tipeSinyalCH1 : data.tipeSinyalCH2
+  const activeMetric = activeCH === 'CH1' ? data.ch1 : data.ch2
+
+  return (
+    <>
+      <div className="card project-hero">
+        <div>
+          <div className="hero-eyebrow"><span className="hero-tag">EP2004 · Osiloskop</span></div>
+          <div className="hero-title">SmartScope — Monitoring Sinyal ESP32</div>
+          <div className="hero-desc">
+            Tampilan web ini disesuaikan dengan kode ESP: dua channel ADC, mode SIN/DC/SQR/TRI, mode layar Dual/Full/Overlay, serta OSD Vpp, frekuensi, dan Vdc.
           </div>
-        ))}
+        </div>
+        <div className="hero-right">
+          <div className={`status-pill ${data.connected?'online':'offline'}`}><div className="status-dot"/>{data.connected?'Realtime aktif':'Device offline'}</div>
+          <button className="btn btn-primary" onClick={()=>{setTemp(deviceId);setShowModal(true)}}>Ubah Device ID</button>
+        </div>
       </div>
-    </div>
 
-    <div className="card info-card">
-      <div className="info-title">Cara Menggunakan SmartScope</div>
-      <div className="steps-list" style={{marginTop:'12px'}}>
-        {[
-          {t:'Nyalakan SmartScope', d:'Tekan saklar power. Layar TFT menyala dan ESP32 terhubung ke WiFi.'},
-          {t:'Buka web interface', d:'Buka browser di HP atau laptop, akses IP ESP32 yang muncul di layar.'},
-          {t:'Sambungkan probe', d:'Hubungkan probe ke Channel 1 atau Channel 2 sesuai kebutuhan.'},
-          {t:'Atur parameter', d:'Gunakan empat tombol fisik untuk mengatur range, trigger, dan mode tampilan.'},
-        ].map((s,i)=>(
-          <div key={s.t} className="step-item">
-            <div className="step-num">{i+1}</div>
-            <div><strong>{s.t}</strong><p>{s.d}</p></div>
+      <div className="summary-strip">
+        <div className="summary-item"><div className="summary-label">Device</div><div className="summary-value">{deviceId}</div></div>
+        <div className="summary-item"><div className="summary-label">Update terakhir</div><div className="summary-value">{data.timestamp}</div></div>
+        <div className="summary-item"><div className="summary-label">Mode tampilan</div><div className="summary-value">{MODE_LABELS[data.modeTampilan] ?? `Mode ${data.modeTampilan}`}</div></div>
+        <div className="summary-item"><div className="summary-label">Channel fokus</div><div className="summary-value">{activeCH} · {SIGNAL_LABELS[activeSignal] ?? '-'}</div></div>
+      </div>
+
+      <Waveform ch1={data.dataCH1} ch2={data.dataCH2} mode={data.modeTampilan}/>
+
+      <div className="oscillo-specs">
+        <div className="card spec-card"><div className="spec-icon">〽️</div><div className="spec-label">Sinyal CH1</div><div className="spec-val">{SIGNAL_LABELS[data.tipeSinyalCH1] ?? '-'}</div><div className="spec-sub">DAC pin 25 · ADC pin 34</div></div>
+        <div className="card spec-card"><div className="spec-icon">〽️</div><div className="spec-label">Sinyal CH2</div><div className="spec-val">{SIGNAL_LABELS[data.tipeSinyalCH2] ?? '-'}</div><div className="spec-sub">DAC pin 26 · ADC pin 35</div></div>
+        <div className="card spec-card"><div className="spec-icon">🖥️</div><div className="spec-label">Mode OLED</div><div className="spec-val">{MODE_LABELS[data.modeTampilan] ?? '-'}</div><div className="spec-sub">0–5 seperti kode ESP</div></div>
+        <div className="card spec-card"><div className="spec-icon">📊</div><div className="spec-label">Sample CH1</div><div className="spec-val">{data.dataCH1.length}</div><div className="spec-sub">Array dataCH1</div></div>
+        <div className="card spec-card"><div className="spec-icon">📊</div><div className="spec-label">Sample CH2</div><div className="spec-val">{data.dataCH2.length}</div><div className="spec-sub">Array dataCH2</div></div>
+        <div className="card spec-card"><div className="spec-icon">ℹ️</div><div className="spec-label">OSD Info</div><div className="spec-val">{data.tampilInfo ? 'ON' : 'OFF'}</div><div className="spec-sub">Toggle tombol pin 14</div></div>
+      </div>
+
+      <div className="two-col">
+        <div className="card info-card osc-measure">
+          <div className="info-title">Pengukuran CH1</div>
+          <div className="measure-grid">
+            <div><span>Vpp</span><strong>{data.ch1.vpp.toFixed(2)} V</strong></div>
+            <div><span>{data.tipeSinyalCH1 === 1 ? 'Vdc' : 'Freq'}</span><strong>{data.tipeSinyalCH1 === 1 ? `${data.ch1.vdc.toFixed(2)} V` : `${data.ch1.freq.toFixed(0)} Hz`}</strong></div>
+            <div><span>Vmax</span><strong>{data.ch1.vmax.toFixed(2)} V</strong></div>
+            <div><span>Vmin</span><strong>{data.ch1.vmin.toFixed(2)} V</strong></div>
           </div>
-        ))}
-      </div>
-    </div>
-
-    <div className="two-col">
-      <div className="card info-card">
-        <div className="pro-con-title good">Kelebihan</div>
-        <div className="pro-con-list">
-          {['Portabilitas tinggi — bisa dibawa ke lapangan','Konektivitas WiFi — monitoring dari HP tanpa kabel','FFT dan DDS generator sudah built-in','Biaya produksi jauh lebih rendah dari osiloskop komersial'].map(k=>(
-            <div key={k} className="pro-con-item">{k}</div>
-          ))}
+        </div>
+        <div className="card info-card osc-measure">
+          <div className="info-title">Pengukuran CH2</div>
+          <div className="measure-grid">
+            <div><span>Vpp</span><strong>{data.ch2.vpp.toFixed(2)} V</strong></div>
+            <div><span>{data.tipeSinyalCH2 === 1 ? 'Vdc' : 'Freq'}</span><strong>{data.tipeSinyalCH2 === 1 ? `${data.ch2.vdc.toFixed(2)} V` : `${data.ch2.freq.toFixed(0)} Hz`}</strong></div>
+            <div><span>Vmax</span><strong>{data.ch2.vmax.toFixed(2)} V</strong></div>
+            <div><span>Vmin</span><strong>{data.ch2.vmin.toFixed(2)} V</strong></div>
+          </div>
         </div>
       </div>
+
       <div className="card info-card">
-        <div className="pro-con-title bad">Keterbatasan</div>
-        <div className="pro-con-list">
-          {['Resolusi dan bandwidth terbatas — efektif hanya untuk sinyal sederhana','Frekuensi tinggi di luar batas operasional tidak bisa divisualisasikan akurat','Hanya 2 kanal input'].map(k=>(
-            <div key={k} className="pro-con-item">{k}</div>
-          ))}
+        <div className="info-title">Struktur data Firebase yang dibaca website</div>
+        <div className="code-block">oscilloscope/{deviceId}/latest</div>
+        <div className="info-body" style={{marginTop:'12px',marginBottom:0}}>
+          Field utama: <strong>dataCH1</strong>, <strong>dataCH2</strong>, <strong>tipeSinyalCH1</strong>, <strong>tipeSinyalCH2</strong>, <strong>modeTampilan</strong>, <strong>tampilInfo</strong>, <strong>sampleTimeUs</strong>, dan opsional <strong>ch1/ch2</strong> untuk Vpp/Freq/Vdc.
         </div>
       </div>
-    </div>
 
-    <div className="card ref-row">
-      <p>Referensi kode:</p>
-      <a href="https://github.com/siliconvalley4066/ESP32TFTOscilloscope" target="_blank" rel="noopener noreferrer">
-        github.com/siliconvalley4066/ESP32TFTOscilloscope
-      </a>
-    </div>
-  </>
-)
+      <div className="foot-note">
+        <div>Firebase path: <span>oscilloscope/{deviceId}/latest</span></div>
+        <div>{error || `OSD aktif: ${activeCH} · Vpp ${activeMetric.vpp.toFixed(2)} V`}</div>
+      </div>
+
+      {showModal && <Modal deviceId={temp} setDeviceId={setTemp} onClose={()=>setShowModal(false)}
+        onSave={()=>{setDeviceId(temp.trim()||'lab01');setShowModal(false)}}/>}
+    </>
+  )
+}
 
 /* ─────────────────────────────── ABOUT US ─── */
 const AboutUs = () => {
