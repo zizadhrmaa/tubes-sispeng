@@ -395,13 +395,27 @@ const SIGNAL_LABELS = ['SIN','DC','SQR','TRI']
 const MODE_LABELS = ['Dual · fokus CH1','Dual · fokus CH2','Full CH1','Full CH2','Overlay · fokus CH1','Overlay · fokus CH2']
 
 const asNumberArray = (value: unknown) => {
-  if (Array.isArray(value)) return value.map(v=>Number(v ?? 0)).filter(Number.isFinite)
+  if (Array.isArray(value)) {
+    return value.map(v => Number(v ?? 0)).filter(Number.isFinite)
+  }
+
+  // Firebase Realtime Database kadang mengembalikan array sebagai object:
+  // { "0": 2048, "1": 2148, ... }
   if (value && typeof value === 'object') {
     return Object.keys(value as Record<string, unknown>)
-      .sort((a,b)=>Number(a)-Number(b))
-      .map(k=>Number((value as Record<string, unknown>)[k] ?? 0))
+      .sort((a,b) => Number(a) - Number(b))
+      .map(k => Number((value as Record<string, unknown>)[k] ?? 0))
       .filter(Number.isFinite)
   }
+
+  // Cadangan kalau data pernah tersimpan sebagai string "2048,2148,..."
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map(v => Number(v.trim()))
+      .filter(Number.isFinite)
+  }
+
   return []
 }
 
@@ -412,6 +426,14 @@ const readMetric = (obj: any, keys: string[], fallback = 0) => {
     if (Number.isFinite(n)) return n
   }
   return fallback
+}
+
+const firstFiniteNumber = (...values: unknown[]) => {
+  for (const value of values) {
+    const n = Number(value)
+    if (Number.isFinite(n)) return n
+  }
+  return 0
 }
 
 const calcChannelStats = (samples: number[], signalType: number, sampleTimeUs: number) => {
@@ -473,18 +495,33 @@ const Oscillo = () => {
     const r = ref(db,`oscilloscope/${deviceId}/latest`)
     return onValue(r, snap=>{
       const j = snap.val()
-      if(!j){ setData(p=>({...p,connected:false,timestamp:'-'})); setError('Data osiloskop belum ada di Firebase.'); return }
-      const rawCH1 = asNumberArray(j.dataCH1 ?? j.ch1?.samples ?? j.samplesCH1)
-      const rawCH2 = asNumberArray(j.dataCH2 ?? j.ch2?.samples ?? j.samplesCH2)
-      const tipeSinyalCH1 = Number(j.tipeSinyalCH1 ?? j.ch1?.tipeSinyal ?? j.ch1?.signalType ?? 0)
-      const tipeSinyalCH2 = Number(j.tipeSinyalCH2 ?? j.ch2?.tipeSinyal ?? j.ch2?.signalType ?? 0)
-      const sampleTimeUs = Number(j.sampleTimeUs ?? j.waktuSamplingUs ?? j.captureTimeUs ?? 128 * 50)
+
+      if(!j){
+        setData(p=>({...p,connected:false,timestamp:'-',dataCH1:[],dataCH2:[]}))
+        setError('Data osiloskop belum ada di Firebase. Pastikan JSON di-import ke oscilloscope/lab01/latest.')
+        return
+      }
+
+      // Format utama yang sesuai kode ESP:
+      // dataCH1, dataCH2, tipeSinyalCH1, tipeSinyalCH2, modeTampilan, tampilInfo, sampleTimeUs.
+      // Fallback tetap disediakan supaya data dummy lama / struktur alternatif masih kebaca.
+      const rawCH1 = asNumberArray(j.dataCH1 ?? j.waveform?.ch1 ?? j.ch1?.samples ?? j.samplesCH1)
+      const rawCH2 = asNumberArray(j.dataCH2 ?? j.waveform?.ch2 ?? j.ch2?.samples ?? j.samplesCH2)
+
+      const tipeSinyalCH1 = firstFiniteNumber(j.tipeSinyalCH1, j.ch1?.tipeSinyal, j.ch1?.signalType)
+      const tipeSinyalCH2 = firstFiniteNumber(j.tipeSinyalCH2, j.ch2?.tipeSinyal, j.ch2?.signalType)
+      const modeTampilan = firstFiniteNumber(j.modeTampilan, j.mode)
+      const sampleTimeUs = firstFiniteNumber(j.sampleTimeUs, j.waktuSamplingUs, j.captureTimeUs, rawCH1.length * 50, 128 * 50)
+
+      // Website menghitung Vpp, Vdc/Vavg, Vmax, Vmin, dan frekuensi dari array ADC,
+      // sama seperti logika kode ESP. Field ch1/ch2 dari Firebase hanya opsional.
       const calcCH1 = calcChannelStats(rawCH1, tipeSinyalCH1, sampleTimeUs)
       const calcCH2 = calcChannelStats(rawCH2, tipeSinyalCH2, sampleTimeUs)
+
       const next: OscilloData = {
         connected: Boolean(j.connected ?? true),
         timestamp: String(j.timestamp ?? new Date().toLocaleTimeString('id-ID')),
-        modeTampilan: Number(j.modeTampilan ?? 0),
+        modeTampilan,
         tampilInfo: Boolean(j.tampilInfo ?? false),
         tipeSinyalCH1,
         tipeSinyalCH2,
@@ -494,21 +531,30 @@ const Oscillo = () => {
         ch1: {
           vpp: readMetric(j.ch1, ['vpp','Vpp'], calcCH1.vpp),
           freq: readMetric(j.ch1, ['freq','frequency','frekuensi'], calcCH1.freq),
-          vdc: readMetric(j.ch1, ['vdc','Vdc','vAvg'], calcCH1.vdc),
+          vdc: readMetric(j.ch1, ['vdc','Vdc','vAvg','vavg'], calcCH1.vdc),
           vmax: readMetric(j.ch1, ['vmax','vMax'], calcCH1.vmax),
           vmin: readMetric(j.ch1, ['vmin','vMin'], calcCH1.vmin),
         },
         ch2: {
           vpp: readMetric(j.ch2, ['vpp','Vpp'], calcCH2.vpp),
           freq: readMetric(j.ch2, ['freq','frequency','frekuensi'], calcCH2.freq),
-          vdc: readMetric(j.ch2, ['vdc','Vdc','vAvg'], calcCH2.vdc),
+          vdc: readMetric(j.ch2, ['vdc','Vdc','vAvg','vavg'], calcCH2.vdc),
           vmax: readMetric(j.ch2, ['vmax','vMax'], calcCH2.vmax),
           vmin: readMetric(j.ch2, ['vmin','vMin'], calcCH2.vmin),
         },
       }
+
       setData(next)
-      setError('')
-    }, ()=>{ setData(p=>({...p,connected:false})); setError('Gagal terhubung ke Firebase.') })
+
+      if (!rawCH1.length && !rawCH2.length) {
+        setError('Firebase sudah terbaca, tapi dataCH1/dataCH2 masih kosong.')
+      } else {
+        setError('')
+      }
+    }, ()=>{
+      setData(p=>({...p,connected:false}))
+      setError('Gagal terhubung ke Firebase.')
+    })
   },[deviceId])
 
   const activeCH = data.modeTampilan === 0 || data.modeTampilan === 2 || data.modeTampilan === 4 ? 'CH1' : 'CH2'
@@ -574,7 +620,7 @@ const Oscillo = () => {
         <div className="info-title">Struktur data Firebase yang dibaca website</div>
         <div className="code-block">oscilloscope/{deviceId}/latest</div>
         <div className="info-body" style={{marginTop:'12px',marginBottom:0}}>
-          Field utama: <strong>dataCH1</strong>, <strong>dataCH2</strong>, <strong>tipeSinyalCH1</strong>, <strong>tipeSinyalCH2</strong>, <strong>modeTampilan</strong>, <strong>tampilInfo</strong>, <strong>sampleTimeUs</strong>, dan opsional <strong>ch1/ch2</strong> untuk Vpp/Freq/Vdc.
+          Field utama yang wajib dari dummy/ESP: <strong>dataCH1</strong>, <strong>dataCH2</strong>, <strong>tipeSinyalCH1</strong>, <strong>tipeSinyalCH2</strong>, <strong>modeTampilan</strong>, <strong>tampilInfo</strong>, dan <strong>sampleTimeUs</strong>. Website menghitung Vpp/Freq/Vdc langsung dari array ADC.
         </div>
       </div>
 
